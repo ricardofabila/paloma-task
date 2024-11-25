@@ -8,35 +8,65 @@ type WebSocketCallbacks = {
     onClose: () => void;
 };
 
+
 export const createTransactionWebSocket = (
     accountId: string,
-    callbacks: WebSocketCallbacks
+    callbacks: WebSocketCallbacks,
+    sinceTransactionId?: string
 ): { close: () => void } => {
-    const wsUrl = WEB_SOCKET_URL + `/accounts/${accountId}/transactions`;
+    let wsUrl = `${WEB_SOCKET_URL}/accounts/${accountId}/transactions`;
 
-    const socket = new WebSocket(wsUrl);
+    if (sinceTransactionId) {
+        wsUrl += `?since=${sinceTransactionId}`;
+    }
 
-    socket.onopen = () => {
-        console.log("WebSocket connection established");
+    let socket: WebSocket;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    let isClosedByClient = false;
+
+    const connect = () => {
+        socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+            console.log("WebSocket connection established");
+            reconnectAttempts = 0;
+        };
+
+        socket.onmessage = (event) => {
+            const transaction: Transaction = JSON.parse(event.data);
+            callbacks.onMessage(transaction);
+        };
+
+        socket.onerror = (event) => {
+            console.error("WebSocket error:", event);
+            callbacks.onError(event);
+        };
+
+        socket.onclose = () => {
+            console.log("WebSocket connection closed");
+            callbacks.onClose();
+
+            if (!isClosedByClient && reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                const timeout = Math.min(1000 * reconnectAttempts, 10000);
+                setTimeout(() => {
+                    console.log(`Attempting to reconnect (Attempt ${reconnectAttempts})...`);
+                    connect();
+                }, timeout);
+            } else if (isClosedByClient) {
+                console.log("WebSocket closed by client; not attempting to reconnect.");
+            } else {
+                console.error("Max reconnection attempts reached.");
+            }
+        };
     };
 
-    socket.onmessage = (event) => {
-        const transaction: Transaction = JSON.parse(event.data);
-        callbacks.onMessage(transaction);
-    };
-
-    socket.onerror = (event) => {
-        console.error("WebSocket error:", event);
-        callbacks.onError(event);
-    };
-
-    socket.onclose = () => {
-        console.log("WebSocket connection closed");
-        callbacks.onClose();
-    };
+    connect();
 
     return {
         close: () => {
+            isClosedByClient = true;
             socket.close();
         },
     };

@@ -9,6 +9,7 @@ import {
     getTransactionFilters,
     setTransactionFilters,
 } from "../services/storageService";
+import {cn} from "../lib/utils";
 
 type Props = {
     accountId: string;
@@ -23,34 +24,46 @@ const TransactionFeed: React.FC<Props> = ({accountId, accountName}) => {
         return getTransactionFilters();
     });
     const [error, setError] = useState<string | null>(null);
+    const [isPaused, setIsPaused] = useState<boolean>(false);
+
+    useEffect(() => {setAllTransactions([])}, [accountId]);
 
     useEffect(() => {
-        const callbacks = {
-            onMessage: (transaction: Transaction) => {
-                setAllTransactions((prev) => [transaction, ...prev]);
+        let socketCloser: { close: () => void } | null = null;
 
-                if (error) {
-                    setError(null);
-                }
-            },
-            onError: (event: Event) => {
-                setError("WebSocket error occurred");
-                console.error(event)
-            },
-            onClose: () => {
-                console.log("WebSocket connection closed");
-                // set transactions to empty to not mix different account transactions
-                setAllTransactions([]);
-            },
-        };
+        if (!isPaused) {
+            const lastTransactionId = allTransactions[0]?.transactionId;
 
-        const {close} = createTransactionWebSocket(accountId, callbacks);
+            const callbacks = {
+                onMessage: (transaction: Transaction) => {
+                    setAllTransactions((prev) => [transaction, ...prev]);
 
-        // Cleanup on unmount
+                    if (error) {
+                        setError(null);
+                    }
+                },
+                onError: (event: Event) => {
+                    setError("WebSocket error occurred. Attempting to reconnect...");
+                    console.error(event)
+                },
+                onClose: () => {
+                    console.log("WebSocket connection closed");
+                },
+            };
+
+            socketCloser = createTransactionWebSocket(
+                accountId,
+                callbacks,
+                lastTransactionId
+            );
+        }
+
         return () => {
-            close();
+            if (socketCloser) {
+                socketCloser.close();
+            }
         };
-    }, [accountId]);
+    }, [accountId, isPaused]);
 
     useEffect(() => {
         let transactions = allTransactions;
@@ -113,6 +126,20 @@ const TransactionFeed: React.FC<Props> = ({accountId, accountName}) => {
                 <b>{accountName}</b>
             </h3>
 
+            {/* Pause/Resume Button */}
+            <Button
+                className={cn(
+                    'mb-4',
+                    isPaused
+                        ? 'bg-green-600 hover:bg-green-700 text-white'
+                        : 'bg-sky-600 hover:bg-sky-700 text-white'
+                )}
+                onClick={() => setIsPaused((prev) => !prev)}
+            >
+                {isPaused ? 'Resume Stream' : 'Pause Stream'}
+            </Button>
+
+
             <div className="mb-4">
                 <h4 className="text-lg font-semibold mb-2">Filter Transactions</h4>
                 <div className="flex flex-wrap gap-4">
@@ -155,6 +182,12 @@ const TransactionFeed: React.FC<Props> = ({accountId, accountName}) => {
             </div>
 
             {error && <div className="text-red-500">{error}</div>}
+
+            {isPaused && (
+                <p className="text-center mb-4">Transactions stream is paused,
+                    <br/> click resume above to continue
+                    receiving data.</p>
+            )}
 
             {filteredTransactions.length === 0 && (
                 <p className="text-center">No transactions for this account match the filters</p>
